@@ -233,6 +233,9 @@ public class InterceptedSubclassFactory<T> extends ProxyFactory<T> {
                                 addConstructedGuardToMethodBody(classMethod);
                                 createForwardingMethodBody(classMethod, methodInfo, staticConstructor);
                                 BeanLogger.LOG.addingMethodToProxy(method);
+                            } else if (Boolean.parseBoolean("true")) {
+                                // EXPERIMENT: non-intercepted methods are not overridden at all (no interception context is pushed)
+                                continue;
                             } else {
                                 // this method is not intercepted
                                 // we still need to override and push InterceptionDecorationContext stack to prevent full interception
