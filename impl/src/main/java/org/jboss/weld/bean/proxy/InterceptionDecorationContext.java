@@ -17,12 +17,10 @@
 
 package org.jboss.weld.bean.proxy;
 
+import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.EmptyStackException;
-
-import org.jboss.weld.contexts.cache.RequestScopedCache;
-import org.jboss.weld.contexts.cache.RequestScopedItem;
 
 /**
  * A class that holds the interception (and decoration) contexts which are currently in progress.
@@ -35,32 +33,32 @@ import org.jboss.weld.contexts.cache.RequestScopedItem;
  * <p/>
  * Classes may create new interception contexts as necessary (e.g. allowing client proxies to create new interception
  * contexts in order to make circular references interceptable multiple times).
+ * <p/>
+ * Each thread uses (at most) one {@link Stack} which is reused across invocations. The thread-local only ever holds a
+ * small {@code Object[]} holder (a JDK class): the stack is referenced strongly only while it is not empty and weakly
+ * otherwise. An idle thread therefore never retains a Weld class (no class loader leak) and an intercepted invocation
+ * does not need to allocate a new stack nor to set / clear the thread-local on every call.
  *
  * @author Marius Bogoevici
  */
 public class InterceptionDecorationContext {
-    private static ThreadLocal<Stack> interceptionContexts = new ThreadLocal<Stack>();
 
-    public static class Stack implements RequestScopedItem {
+    // holder[ACTIVE] - the stack of this thread while it is not empty, null otherwise
+    private static final int ACTIVE = 0;
+    // holder[REUSABLE] - a WeakReference to the (possibly empty) stack of this thread
+    private static final int REUSABLE = 1;
+
+    private static final ThreadLocal<Object[]> interceptionContexts = new ThreadLocal<Object[]>();
+
+    public static class Stack {
         private static final int INITIAL_CAPACITY = 4;
-        private boolean removeWhenEmpty;
         private final Deque<CombinedInterceptorAndDecoratorStackMethodHandler> elements;
-        private final ThreadLocal<Stack> interceptionContexts;
-        private boolean valid;
+        private final Object[] holder;
 
-        private Stack(ThreadLocal<Stack> interceptionContexts) {
-            this.interceptionContexts = interceptionContexts;
+        private Stack(Object[] holder) {
+            this.holder = holder;
             // the stack is usually very shallow, do not allocate the default 16 slots
             this.elements = new ArrayDeque<CombinedInterceptorAndDecoratorStackMethodHandler>(INITIAL_CAPACITY);
-            /*
-             * Setting / removing of a thread-local is much more expensive compared to get. Therefore,
-             * if RequestScopedCache is active we register the thread-local for removal at the end of the
-             * request. This yields possitive results only if the number of intercepted invocations is large.
-             * If it is not, the performance characteristics are similar to explicitly removing the thread-local
-             * once the stack gets empty.
-             */
-            this.removeWhenEmpty = !RequestScopedCache.addItemIfActive(this);
-            this.valid = true;
         }
 
         /**
@@ -72,7 +70,6 @@ public class InterceptionDecorationContext {
          * @return true if the given context was pushed to the top of the stack, false if the given context was on top already
          */
         public boolean startIfNotOnTop(CombinedInterceptorAndDecoratorStackMethodHandler context) {
-            checkState();
             if (elements.isEmpty() || peek() != context) {
                 push(context);
                 return true;
@@ -85,55 +82,24 @@ public class InterceptionDecorationContext {
         }
 
         private void push(CombinedInterceptorAndDecoratorStackMethodHandler item) {
-            checkState();
+            if (elements.isEmpty()) {
+                // the stack becomes active - reference it strongly so that it cannot be garbage collected
+                holder[ACTIVE] = this;
+            }
             elements.addFirst(item);
         }
 
         public CombinedInterceptorAndDecoratorStackMethodHandler peek() {
-            checkState();
             return elements.peekFirst();
         }
 
         private CombinedInterceptorAndDecoratorStackMethodHandler pop() {
-            checkState();
             CombinedInterceptorAndDecoratorStackMethodHandler top = elements.removeFirst();
-            removeIfEmpty();
+            if (elements.isEmpty()) {
+                // only weakly referenced from now on, the thread-local does not retain any Weld class
+                holder[ACTIVE] = null;
+            }
             return top;
-        }
-
-        private void checkState() {
-            if (!valid) {
-                throw new IllegalStateException("This InterceptionDecorationContext is no longer valid.");
-            }
-        }
-
-        @Override
-        public void invalidate() {
-            /*
-             * This cached item is being invalidated.
-             * It does not necessarily mean that the request is being destroyed - it may just be the case that it is being
-             * flushed in the middle
-             * of a request (e.g. for AlterableContext.destroy()).
-             * Therefore, we cannot remove IDC now but we just set removeWhenEmpty flag and let it remove itself once the stack
-             * gets empty.
-             */
-            removeWhenEmpty = true;
-            removeIfEmpty();
-        }
-
-        private void removeIfEmpty() {
-            if (removeWhenEmpty && elements.isEmpty()) {
-                /*
-                 * Clear the value instead of calling ThreadLocal.remove(). remove() clears the weak reference
-                 * of the ThreadLocalMap entry (a native call) and expunges the entry, so that the next set()
-                 * has to allocate a new entry again. For an intercepted invocation outside of a request this
-                 * happens on every call and is the most expensive part of it. A null value still does not
-                 * retain any Weld class (the entry key is a weak reference to a java.lang.ThreadLocal), so
-                 * there is no class loader leak.
-                 */
-                interceptionContexts.set(null);
-                valid = false;
-            }
         }
 
         public int size() {
@@ -142,12 +108,20 @@ public class InterceptionDecorationContext {
 
         @Override
         public String toString() {
-            return "Stack [valid=" + valid + ", cached=" + !removeWhenEmpty + ", elements=" + elements + "]";
+            return "Stack [elements=" + elements + "]";
         }
 
     }
 
     private InterceptionDecorationContext() {
+    }
+
+    /**
+     * @return the stack of the current thread if it is not empty, null otherwise
+     */
+    private static Stack activeStack() {
+        Object[] holder = interceptionContexts.get();
+        return holder == null ? null : (Stack) holder[ACTIVE];
     }
 
     /**
@@ -157,7 +131,7 @@ public class InterceptionDecorationContext {
      * @throws EmptyStackException
      */
     public static CombinedInterceptorAndDecoratorStackMethodHandler peek() {
-        return peek(interceptionContexts.get());
+        return peek(activeStack());
     }
 
     /**
@@ -166,7 +140,7 @@ public class InterceptionDecorationContext {
      * @return the current top of the stack or returns null if the stack is empty
      */
     public static CombinedInterceptorAndDecoratorStackMethodHandler peekIfNotEmpty() {
-        Stack stack = interceptionContexts.get();
+        Stack stack = activeStack();
         if (stack == null) {
             return null;
         }
@@ -177,11 +151,11 @@ public class InterceptionDecorationContext {
      * Indicates whether the stack is empty.
      */
     public static boolean empty() {
-        return empty(interceptionContexts.get());
+        return activeStack() == null;
     }
 
     public static void endInterceptorContext() {
-        pop(interceptionContexts.get());
+        pop(activeStack());
     }
 
     /**
@@ -197,21 +171,13 @@ public class InterceptionDecorationContext {
      * returned value.
      */
     public static Stack startIfNotEmpty() {
-        Stack stack = interceptionContexts.get();
+        Stack stack = activeStack();
         if (stack == null) {
-            // Fast path: there is no interception context on this thread (the caller is not intercepted).
-            // Do not create (and immediately remove) an empty Stack - allocating it and setting/removing the
-            // thread-local on every client proxy invocation is expensive and has no observable effect.
+            // there is no interception context on this thread (the caller is not intercepted)
             return null;
         }
-        if (!stack.elements.isEmpty()) {
-            stack.push(CombinedInterceptorAndDecoratorStackMethodHandler.NULL_INSTANCE);
-            return stack;
-        } else {
-            // if RequestScopedCache is not active, remove now to prevent ThreadLocal leak
-            stack.removeIfEmpty();
-            return null;
-        }
+        stack.push(CombinedInterceptorAndDecoratorStackMethodHandler.NULL_INSTANCE);
+        return stack;
     }
 
     /**
@@ -231,15 +197,27 @@ public class InterceptionDecorationContext {
     }
 
     /**
-     * Gets the current Stack. If the stack is not set, a new empty instance is created and set.
+     * Gets the current Stack. If there is no stack for the current thread, a new empty instance is created.
+     * The returned stack may be empty; it is only guaranteed to stay the stack of the current thread while the caller
+     * holds a reference to it.
      *
-     * @return
+     * @return the stack of the current thread
      */
+    @SuppressWarnings("unchecked")
     public static Stack getStack() {
-        Stack stack = interceptionContexts.get();
+        Object[] holder = interceptionContexts.get();
+        if (holder == null) {
+            holder = new Object[2];
+            interceptionContexts.set(holder);
+        }
+        Stack stack = (Stack) holder[ACTIVE];
         if (stack == null) {
-            stack = new Stack(interceptionContexts);
-            interceptionContexts.set(stack);
+            WeakReference<Stack> ref = (WeakReference<Stack>) holder[REUSABLE];
+            stack = ref == null ? null : ref.get();
+            if (stack == null) {
+                stack = new Stack(holder);
+                holder[REUSABLE] = new WeakReference<Stack>(stack);
+            }
         }
         return stack;
     }
@@ -257,14 +235,6 @@ public class InterceptionDecorationContext {
             throw new EmptyStackException();
         } else {
             return stack.peek();
-        }
-    }
-
-    private static boolean empty(Stack stack) {
-        if (stack == null) {
-            return true;
-        } else {
-            return stack.elements.isEmpty();
         }
     }
 }
