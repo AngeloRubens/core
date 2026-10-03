@@ -42,6 +42,7 @@ public class InterceptionDecorationContext {
     private static ThreadLocal<Stack> interceptionContexts = new ThreadLocal<Stack>();
 
     public static class Stack implements RequestScopedItem {
+        private static final int INITIAL_CAPACITY = 4;
         private boolean removeWhenEmpty;
         private final Deque<CombinedInterceptorAndDecoratorStackMethodHandler> elements;
         private final ThreadLocal<Stack> interceptionContexts;
@@ -49,7 +50,8 @@ public class InterceptionDecorationContext {
 
         private Stack(ThreadLocal<Stack> interceptionContexts) {
             this.interceptionContexts = interceptionContexts;
-            this.elements = new ArrayDeque<CombinedInterceptorAndDecoratorStackMethodHandler>();
+            // the stack is usually very shallow, do not allocate the default 16 slots
+            this.elements = new ArrayDeque<CombinedInterceptorAndDecoratorStackMethodHandler>(INITIAL_CAPACITY);
             /*
              * Setting / removing of a thread-local is much more expensive compared to get. Therefore,
              * if RequestScopedCache is active we register the thread-local for removal at the end of the
@@ -121,7 +123,15 @@ public class InterceptionDecorationContext {
 
         private void removeIfEmpty() {
             if (removeWhenEmpty && elements.isEmpty()) {
-                interceptionContexts.remove();
+                /*
+                 * Clear the value instead of calling ThreadLocal.remove(). remove() clears the weak reference
+                 * of the ThreadLocalMap entry (a native call) and expunges the entry, so that the next set()
+                 * has to allocate a new entry again. For an intercepted invocation outside of a request this
+                 * happens on every call and is the most expensive part of it. A null value still does not
+                 * retain any Weld class (the entry key is a weak reference to a java.lang.ThreadLocal), so
+                 * there is no class loader leak.
+                 */
+                interceptionContexts.set(null);
                 valid = false;
             }
         }
