@@ -187,7 +187,13 @@ public class InterceptionDecorationContext {
      * returned value.
      */
     public static Stack startIfNotEmpty() {
-        Stack stack = getStack();
+        Stack stack = interceptionContexts.get();
+        if (stack == null) {
+            // Fast path: there is no interception context on this thread (the caller is not intercepted).
+            // Do not create (and immediately remove) an empty Stack - allocating it and setting/removing the
+            // thread-local on every client proxy invocation is expensive and has no observable effect.
+            return null;
+        }
         if (!stack.elements.isEmpty()) {
             stack.push(CombinedInterceptorAndDecoratorStackMethodHandler.NULL_INSTANCE);
             return stack;
