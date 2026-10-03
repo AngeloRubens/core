@@ -17,6 +17,10 @@
 
 package org.jboss.weld.bean.proxy;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
+import java.lang.invoke.SwitchPoint;
 import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -49,6 +53,31 @@ public class InterceptionDecorationContext {
     private static final int REUSABLE = 1;
 
     private static final ThreadLocal<Object[]> interceptionContexts = new ThreadLocal<Object[]>();
+
+    /*
+     * Valid until any thread creates its stack holder for the first time (it is never re-validated). While it is valid,
+     * no thread can have an interception context, so client proxies do not need to look up the thread-local at all.
+     * This is the case whenever no intercepted or decorated method has been invoked yet, e.g. in deployments without
+     * interceptors and decorators.
+     *
+     * A SwitchPoint is used instead of a plain static flag because the JIT compiles the guard to nothing: neither
+     * deployments without interception nor deployments using it pay for the check. The invalidation (a
+     * deoptimization of the dependent code) happens once, in getStack(), before the holder is published to the
+     * current thread; a thread can only have an active stack if it has created its holder itself.
+     */
+    private static final SwitchPoint NO_HOLDER_CREATED = new SwitchPoint();
+    private static volatile boolean holderCreated;
+    private static final MethodHandle START_IF_NOT_EMPTY;
+
+    static {
+        try {
+            MethodHandle lookup = MethodHandles.lookup().findStatic(InterceptionDecorationContext.class,
+                    "startIfNotEmptyLookup", MethodType.methodType(Stack.class));
+            START_IF_NOT_EMPTY = NO_HOLDER_CREATED.guardWithTest(MethodHandles.constant(Stack.class, null), lookup);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+    }
 
     public static class Stack {
         private static final int INITIAL_CAPACITY = 4;
@@ -171,6 +200,17 @@ public class InterceptionDecorationContext {
      * returned value.
      */
     public static Stack startIfNotEmpty() {
+        try {
+            // constant null until the first stack holder is created, startIfNotEmptyLookup() afterwards
+            return (Stack) START_IF_NOT_EMPTY.invokeExact();
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Throwable e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private static Stack startIfNotEmptyLookup() {
         Stack stack = activeStack();
         if (stack == null) {
             // there is no interception context on this thread (the caller is not intercepted)
@@ -207,6 +247,9 @@ public class InterceptionDecorationContext {
     public static Stack getStack() {
         Object[] holder = interceptionContexts.get();
         if (holder == null) {
+            if (!holderCreated) {
+                noHolderCreatedAnymore();
+            }
             holder = new Object[2];
             interceptionContexts.set(holder);
         }
@@ -220,6 +263,14 @@ public class InterceptionDecorationContext {
             }
         }
         return stack;
+    }
+
+    private static synchronized void noHolderCreatedAnymore() {
+        if (!holderCreated) {
+            // switch all client proxies to the thread-local lookup before this thread can start an interception context
+            SwitchPoint.invalidateAll(new SwitchPoint[] { NO_HOLDER_CREATED });
+            holderCreated = true;
+        }
     }
 
     private static CombinedInterceptorAndDecoratorStackMethodHandler pop(Stack stack) {
