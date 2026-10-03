@@ -58,6 +58,7 @@ public class ContextBeanInstance<T> extends AbstractBeanInstance implements Seri
     private final String contextId;
     // The actual type of the resulting bean instance
     private final transient Class<?> instanceType;
+    private final transient Container container;
     private final transient BeanManagerImpl manager;
     private final transient CurrentInjectionPoint currentInjectionPoint;
 
@@ -75,12 +76,15 @@ public class ContextBeanInstance<T> extends AbstractBeanInstance implements Seri
         this.contextId = contextId;
         this.instanceType = computeInstanceType(bean);
         BeanLogger.LOG.createdContextInstance(bean, id);
-        this.manager = Container.instance(contextId).deploymentManager();
+        this.container = Container.instance(contextId);
+        this.manager = container.deploymentManager();
         this.currentInjectionPoint = manager.getServices().get(CurrentInjectionPoint.class);
     }
 
     public T getInstance() {
-        if (!Container.isSet(contextId)) {
+        // Checking the container we were created for is a single volatile read; the registry lookup in
+        // Container.isSet() is only needed once that container has been cleaned up (shut down)
+        if (container.isCleanedUp() && !Container.isSet(contextId)) {
             throw ContextLogger.LOG.contextualReferenceNotValidAfterShutdown(bean, contextId);
         }
         T existingInstance = ContextualInstance.getIfExists(bean, manager);
