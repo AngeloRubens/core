@@ -50,6 +50,19 @@ public class InterceptionDecorationContext {
 
     private static final ThreadLocal<Object[]> interceptionContexts = new ThreadLocal<Object[]>();
 
+    /*
+     * Set (and never reset) once any thread has created its stack holder. As long as it is false, no thread can have
+     * an interception context, so client proxies do not need to look up the thread-local at all. This is the case
+     * whenever no intercepted or decorated method has been invoked yet, e.g. in deployments without interceptors and
+     * decorators.
+     *
+     * The field is deliberately not volatile: a thread can only have an active stack if that same thread has created
+     * its holder before (in getStack()), so in program order it always sees its own write. A stale false read on
+     * another thread means that this other thread has no holder (and no stack) either, i.e. the fast path is
+     * still correct.
+     */
+    private static boolean holderCreated;
+
     public static class Stack {
         private static final int INITIAL_CAPACITY = 4;
         private final Deque<CombinedInterceptorAndDecoratorStackMethodHandler> elements;
@@ -171,6 +184,10 @@ public class InterceptionDecorationContext {
      * returned value.
      */
     public static Stack startIfNotEmpty() {
+        if (!holderCreated) {
+            // no interception context has ever been started in this class loader
+            return null;
+        }
         Stack stack = activeStack();
         if (stack == null) {
             // there is no interception context on this thread (the caller is not intercepted)
@@ -207,6 +224,7 @@ public class InterceptionDecorationContext {
     public static Stack getStack() {
         Object[] holder = interceptionContexts.get();
         if (holder == null) {
+            holderCreated = true;
             holder = new Object[2];
             interceptionContexts.set(holder);
         }
