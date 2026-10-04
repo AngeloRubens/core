@@ -41,18 +41,30 @@ class TerminalAroundInvokeInvocationContext extends AroundInvokeInvocationContex
     public TerminalAroundInvokeInvocationContext(Object target, Method method, Method proceed, Object[] parameters,
             Map<String, Object> contextData,
             Set<Annotation> interceptorBindings, CombinedInterceptorAndDecoratorStackMethodHandler currentHandler) {
-        super(target, method, proceed, parameters, (contextData == null) ? null : new HashMap<String, Object>(contextData),
-                interceptorBindings, currentHandler);
+        this(target, method, proceed, MethodInvoker.of(proceed), parameters, contextData, interceptorBindings,
+                currentHandler);
+    }
+
+    TerminalAroundInvokeInvocationContext(Object target, Method method, Method proceed, MethodInvoker proceedInvoker,
+            Object[] parameters, Map<String, Object> contextData,
+            Set<Annotation> interceptorBindings, CombinedInterceptorAndDecoratorStackMethodHandler currentHandler) {
+        super(target, method, proceed, proceedInvoker, parameters,
+                (contextData == null) ? null : new HashMap<String, Object>(contextData), interceptorBindings, currentHandler);
     }
 
     public TerminalAroundInvokeInvocationContext(NonTerminalAroundInvokeInvocationContext ctx) {
-        super(ctx.getTarget(), ctx.getMethod(), ctx.getProceed(), ctx.getParameters(), ctx.contextData,
+        super(ctx.getTarget(), ctx.getMethod(), ctx.getProceed(), ctx.proceedInvoker, ctx.getParameters(), ctx.contextData,
                 ctx.getInterceptorBindings(), ctx.currentHandler);
     }
 
     @Override
     public Object proceedInternal() throws Exception {
-        return getProceed().invoke(getTarget(), getParameters());
+        // same semantics as getProceed().invoke(getTarget(), getParameters())
+        MethodInvoker invoker = proceedInvoker;
+        if (invoker == null) {
+            return getProceed().invoke(getTarget(), getParameters());
+        }
+        return invoker.invoke(getProceed(), getTarget(), getParameters());
     }
 
     @Override
