@@ -25,6 +25,7 @@ import java.util.Set;
 import jakarta.interceptor.InvocationContext;
 
 import org.jboss.weld.bean.proxy.CombinedInterceptorAndDecoratorStackMethodHandler;
+import org.jboss.weld.bean.proxy.InterceptionDecorationContext.Stack;
 
 /**
  * The terminal {@link InvocationContext} in the interception chain. It is passed to the last interceptor in the chain and
@@ -42,19 +43,21 @@ class TerminalAroundInvokeInvocationContext extends AroundInvokeInvocationContex
             Map<String, Object> contextData,
             Set<Annotation> interceptorBindings, CombinedInterceptorAndDecoratorStackMethodHandler currentHandler) {
         this(target, method, proceed, MethodInvoker.of(proceed), parameters, contextData, interceptorBindings,
-                currentHandler);
+                currentHandler, null);
     }
 
     TerminalAroundInvokeInvocationContext(Object target, Method method, Method proceed, MethodInvoker proceedInvoker,
             Object[] parameters, Map<String, Object> contextData,
-            Set<Annotation> interceptorBindings, CombinedInterceptorAndDecoratorStackMethodHandler currentHandler) {
+            Set<Annotation> interceptorBindings, CombinedInterceptorAndDecoratorStackMethodHandler currentHandler,
+            Stack stack) {
         super(target, method, proceed, proceedInvoker, parameters,
-                (contextData == null) ? null : new HashMap<String, Object>(contextData), interceptorBindings, currentHandler);
+                (contextData == null) ? null : new HashMap<String, Object>(contextData), interceptorBindings, currentHandler,
+                stack);
     }
 
     public TerminalAroundInvokeInvocationContext(NonTerminalAroundInvokeInvocationContext ctx) {
         super(ctx.getTarget(), ctx.getMethod(), ctx.getProceed(), ctx.proceedInvoker, ctx.getParameters(), ctx.contextData,
-                ctx.getInterceptorBindings(), ctx.currentHandler);
+                ctx.getInterceptorBindings(), ctx.currentHandler, ctx.creatorStack);
     }
 
     @Override
