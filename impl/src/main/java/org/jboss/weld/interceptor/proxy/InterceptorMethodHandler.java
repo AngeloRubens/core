@@ -32,6 +32,11 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
 
     private final InterceptionContext ctx;
     private final transient ConcurrentMap<Method, CachedInterceptionChain> cachedChains;
+    /*
+     * The chain of the first intercepted method, avoids the map lookup for beans with a single (or a main) intercepted
+     * method. Set at most once; the chain is immutable (final fields only) so it is safely published by the plain write.
+     */
+    private transient CachedInterceptionChain firstChain;
 
     public InterceptorMethodHandler(InterceptionContext ctx) {
         this.ctx = ctx;
@@ -46,7 +51,10 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
     public Object invoke(Stack stack, Object self, Method thisMethod, Method proceed, Object[] args) throws Throwable {
         if (proceed != null && getClass() == InterceptorMethodHandler.class) {
             // fast path for an around invoke interception whose chain has been created already
-            CachedInterceptionChain chain = cachedChains.get(thisMethod);
+            CachedInterceptionChain chain = firstChain;
+            if (chain == null || chain.method != thisMethod) {
+                chain = cachedChains.get(thisMethod);
+            }
             if (chain != null && chain.proceed == proceed) {
                 /*
                  * A cached chain implies that (1) thisMethod is not an interceptor method of the target class and (2) the
@@ -119,16 +127,18 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
                 cachedChain = new CachedInterceptionChain(
                         ctx.buildInterceptorMethodInvocations(instance, method, interceptionType), ctx.getInterceptionModel()
                                 .getMemberInterceptorBindings(method),
-                        proceed);
+                        method, proceed);
                 CachedInterceptionChain old = cachedChains.putIfAbsent(method, cachedChain);
                 if (old != null) {
                     cachedChain = old;
+                } else if (firstChain == null) {
+                    firstChain = cachedChain;
                 }
             }
             return cachedChain;
         }
         return new CachedInterceptionChain(ctx.buildInterceptorMethodInvocations(instance, null, interceptionType),
-                ctx.getInterceptionModel().getClassInterceptorBindings(), proceed);
+                ctx.getInterceptionModel().getClassInterceptorBindings(), null, proceed);
     }
 
     private boolean isInterceptorMethod(Method method) {
@@ -143,14 +153,16 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
 
         private final List<InterceptorMethodInvocation> interceptorMethods;
         private final Set<Annotation> interceptorBindings;
-        // the proceed method the chain was created for and its invoker
+        // the intercepted method (null for lifecycle callbacks), the proceed method the chain was created for and its invoker
+        private final Method method;
         private final Method proceed;
         private final MethodInvoker proceedInvoker;
 
         public CachedInterceptionChain(List<InterceptorMethodInvocation> chain, Set<Annotation> interceptorBindings,
-                Method proceed) {
+                Method method, Method proceed) {
             this.interceptorMethods = chain;
             this.interceptorBindings = interceptorBindings;
+            this.method = method;
             this.proceed = proceed;
             // only needed if there are around invoke interceptors
             this.proceedInvoker = chain.isEmpty() ? null : MethodInvoker.of(proceed);
