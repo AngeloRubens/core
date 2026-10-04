@@ -62,7 +62,7 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
 
     protected Object executeInterception(Object instance, Method method, Method proceed, Object[] args,
             InterceptionType interceptionType, Stack stack) throws Throwable {
-        CachedInterceptionChain chain = getInterceptionChain(instance, method, interceptionType);
+        CachedInterceptionChain chain = getInterceptionChain(instance, method, proceed, interceptionType);
         if (chain.interceptorMethods.isEmpty()) {
             // shortcut if there are no interceptors
             if (proceed == null) {
@@ -86,8 +86,8 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
 
     protected Object executeAroundInvoke(Object instance, Method method, Method proceed, Object[] args,
             CachedInterceptionChain chain, Stack stack) throws Throwable {
-        InvocationContext ctx = create(instance, method, proceed, args, chain.interceptorMethods,
-                chain.interceptorBindings, stack);
+        InvocationContext ctx = create(instance, method, proceed, chain.getProceedInvoker(proceed), args,
+                chain.interceptorMethods, chain.interceptorBindings, stack);
         try {
             return chain.interceptorMethods.get(0).invoke(ctx);
         } catch (InvocationTargetException e) {
@@ -95,13 +95,15 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
         }
     }
 
-    private CachedInterceptionChain getInterceptionChain(Object instance, Method method, InterceptionType interceptionType) {
+    private CachedInterceptionChain getInterceptionChain(Object instance, Method method, Method proceed,
+            InterceptionType interceptionType) {
         if (method != null) {
             CachedInterceptionChain cachedChain = cachedChains.get(method);
             if (cachedChain == null) {
                 cachedChain = new CachedInterceptionChain(
                         ctx.buildInterceptorMethodInvocations(instance, method, interceptionType), ctx.getInterceptionModel()
-                                .getMemberInterceptorBindings(method));
+                                .getMemberInterceptorBindings(method),
+                        proceed);
                 CachedInterceptionChain old = cachedChains.putIfAbsent(method, cachedChain);
                 if (old != null) {
                     cachedChain = old;
@@ -110,7 +112,7 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
             return cachedChain;
         }
         return new CachedInterceptionChain(ctx.buildInterceptorMethodInvocations(instance, null, interceptionType),
-                ctx.getInterceptionModel().getClassInterceptorBindings());
+                ctx.getInterceptionModel().getClassInterceptorBindings(), proceed);
     }
 
     private boolean isInterceptorMethod(Method method) {
@@ -125,10 +127,22 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
 
         private final List<InterceptorMethodInvocation> interceptorMethods;
         private final Set<Annotation> interceptorBindings;
+        // the proceed method the chain was created for and its invoker
+        private final Method proceed;
+        private final MethodInvoker proceedInvoker;
 
-        public CachedInterceptionChain(List<InterceptorMethodInvocation> chain, Set<Annotation> interceptorBindings) {
+        public CachedInterceptionChain(List<InterceptorMethodInvocation> chain, Set<Annotation> interceptorBindings,
+                Method proceed) {
             this.interceptorMethods = chain;
             this.interceptorBindings = interceptorBindings;
+            this.proceed = proceed;
+            // only needed if there are around invoke interceptors
+            this.proceedInvoker = chain.isEmpty() ? null : MethodInvoker.of(proceed);
+        }
+
+        MethodInvoker getProceedInvoker(Method proceed) {
+            // the proceed method is the same for every invocation of a given method of a given instance
+            return proceed == this.proceed ? proceedInvoker : MethodInvoker.of(proceed);
         }
     }
 }
