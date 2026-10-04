@@ -16,6 +16,8 @@
  */
 package org.jboss.weld.interceptor.proxy;
 
+import java.lang.invoke.CallSite;
+import java.lang.invoke.LambdaMetafactory;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
@@ -24,6 +26,8 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import org.jboss.weld.util.Primitives;
 
@@ -93,6 +97,13 @@ public final class MethodInvoker {
     private final MethodHandle spreadHandle;
     // (Object, Object)Object, null if the method does not declare exactly one parameter or reflection has to be used
     private final MethodHandle singleArgumentHandle;
+    /*
+     * Lambdas (LambdaMetafactory) invoking the method directly, for methods with a non-void return type and no parameter or
+     * a single reference type parameter (e.g. @AroundInvoke methods and getters), null if not applicable or not possible.
+     * Unlike a method handle stored in a field, a call through them can be inlined by the JIT.
+     */
+    private final Function<Object, Object> noArgumentFunction;
+    private final BiFunction<Object, Object, Object> singleArgumentFunction;
 
     @SuppressWarnings("deprecation")
     private MethodInvoker(Method method) {
@@ -122,6 +133,47 @@ public final class MethodInvoker {
             this.spreadHandle = null;
             this.singleArgumentHandle = null;
         }
+        Object function = handle != null ? createFunction(method, parameterTypes) : null;
+        this.noArgumentFunction = parameterTypes.length == 0 ? asFunction(function) : null;
+        this.singleArgumentFunction = parameterTypes.length == 1 ? asBiFunction(function) : null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Function<Object, Object> asFunction(Object function) {
+        return (Function<Object, Object>) function;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static BiFunction<Object, Object, Object> asBiFunction(Object function) {
+        return (BiFunction<Object, Object, Object>) function;
+    }
+
+    private static Object createFunction(Method method, Class<?>[] parameterTypes) {
+        Class<?> returnType = method.getReturnType();
+        if (returnType == void.class || parameterTypes.length > 1
+                || (parameterTypes.length == 1 && parameterTypes[0].isPrimitive())) {
+            return null;
+        }
+        try {
+            // requires the package of the declaring class to be open to Weld; the lambda class is defined in that package
+            MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(method.getDeclaringClass(), MethodHandles.lookup());
+            MethodHandle implementation = lookup.unreflect(method);
+            Class<?> boxedReturnType = Primitives.wrap(returnType);
+            CallSite callSite;
+            if (parameterTypes.length == 0) {
+                callSite = LambdaMetafactory.metafactory(lookup, "apply", MethodType.methodType(Function.class),
+                        MethodType.methodType(Object.class, Object.class), implementation,
+                        MethodType.methodType(boxedReturnType, method.getDeclaringClass()));
+            } else {
+                callSite = LambdaMetafactory.metafactory(lookup, "apply", MethodType.methodType(BiFunction.class),
+                        MethodType.methodType(Object.class, Object.class, Object.class), implementation,
+                        MethodType.methodType(boxedReturnType, method.getDeclaringClass(), parameterTypes[0]));
+            }
+            return callSite.getTarget().invoke();
+        } catch (Throwable e) {
+            // e.g. a package not open to Weld, a security manager - use the method handle
+            return null;
+        }
     }
 
     /**
@@ -130,6 +182,14 @@ public final class MethodInvoker {
      * @param method the method this invoker was created for (or an equal one), invoked if the method handle cannot be used
      */
     public Object invoke(Method method, Object target, Object[] args) throws IllegalAccessException, InvocationTargetException {
+        Function<Object, Object> function = noArgumentFunction;
+        if (function != null && args != null && args.length == 0 && receiverType.isInstance(target)) {
+            try {
+                return function.apply(target);
+            } catch (Throwable e) {
+                throw new InvocationTargetException(e);
+            }
+        }
         MethodHandle handle = spreadHandle;
         if (handle != null && permitsCachedAccess(method) && receiverType.isInstance(target) && accepts(args)) {
             try {
@@ -147,6 +207,14 @@ public final class MethodInvoker {
      * @param method the method this invoker was created for (or an equal one), invoked if the method handle cannot be used
      */
     public Object invoke(Method method, Object target, Object arg) throws IllegalAccessException, InvocationTargetException {
+        BiFunction<Object, Object, Object> function = singleArgumentFunction;
+        if (function != null && receiverType.isInstance(target) && accepts(0, arg)) {
+            try {
+                return function.apply(target, arg);
+            } catch (Throwable e) {
+                throw new InvocationTargetException(e);
+            }
+        }
         MethodHandle handle = singleArgumentHandle;
         if (handle != null && permitsCachedAccess(method) && receiverType.isInstance(target) && accepts(0, arg)) {
             try {
