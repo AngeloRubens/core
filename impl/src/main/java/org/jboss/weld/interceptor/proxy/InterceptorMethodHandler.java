@@ -42,6 +42,22 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
     }
 
     public Object invoke(Stack stack, Object self, Method thisMethod, Method proceed, Object[] args) throws Throwable {
+        if (proceed != null && getClass() == InterceptorMethodHandler.class) {
+            // fast path for an around invoke interception whose chain has been created already
+            CachedInterceptionChain chain = cachedChains.get(thisMethod);
+            if (chain != null && chain.proceed == proceed) {
+                /*
+                 * A cached chain implies that (1) thisMethod is not an interceptor method of the target class and (2) the
+                 * given proceed method has been made accessible already (if needed), when the chain was created by the
+                 * slow path below. Neither can change for a given proceed method and target instance.
+                 */
+                if (chain.interceptorMethods.isEmpty()) {
+                    // shortcut if there are no interceptors
+                    return Reflections.invokeAndUnwrap(self, proceed, args);
+                }
+                return executeAroundInvoke(self, thisMethod, proceed, args, chain, stack);
+            }
+        }
         Reflections.ensureAccessible(proceed, self);
         if (proceed == null) {
             if (thisMethod.getName().equals(InterceptionUtils.POST_CONSTRUCT)) {
