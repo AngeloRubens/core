@@ -106,7 +106,7 @@ public final class MethodInvoker {
         if (!Modifier.isStatic(method.getModifiers())) {
             try {
                 // no access check if the method is accessible; otherwise the same check as reflection, performed by Weld
-                handle = MethodHandles.lookup().unreflect(method);
+                handle = Boolean.getBoolean("never") ? MethodHandles.lookup().unreflect(method) : null;
             } catch (IllegalAccessException | RuntimeException e) {
                 // e.g. a module not readable by Weld - use reflection
                 handle = null;
