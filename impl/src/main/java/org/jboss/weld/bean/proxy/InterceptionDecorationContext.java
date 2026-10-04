@@ -82,12 +82,15 @@ public class InterceptionDecorationContext {
     public static class Stack {
         private static final int INITIAL_CAPACITY = 4;
         private final Object[] holder;
+        // the thread this stack belongs to
+        private final Thread owner;
         // elements[0] is the bottom of the stack, elements[size - 1] the top; unused slots are always null
         private CombinedInterceptorAndDecoratorStackMethodHandler[] elements;
         private int size;
 
         private Stack(Object[] holder) {
             this.holder = holder;
+            this.owner = Thread.currentThread();
             // the stack is usually very shallow
             this.elements = new CombinedInterceptorAndDecoratorStackMethodHandler[INITIAL_CAPACITY];
         }
@@ -164,6 +167,14 @@ public class InterceptionDecorationContext {
 
         public int size() {
             return size;
+        }
+
+        /**
+         * @return true if this is the stack of the current thread (the stack a {@link #getStack()} call on the current thread
+         *         returns as long as the caller holds a reference to this stack)
+         */
+        public boolean isOwnedByCurrentThread() {
+            return owner == Thread.currentThread();
         }
 
         @Override
@@ -269,6 +280,25 @@ public class InterceptionDecorationContext {
      */
     public static Stack startIfNotOnTop(CombinedInterceptorAndDecoratorStackMethodHandler context) {
         Stack stack = getStack();
+        if (stack.startIfNotOnTop(context)) {
+            return stack;
+        }
+        return null;
+    }
+
+    /**
+     * Same as {@link #startIfNotOnTop(CombinedInterceptorAndDecoratorStackMethodHandler)} but avoids the thread-local lookup
+     * if the given stack (obtained earlier and still referenced by the caller) is the stack of the current thread.
+     *
+     * @param stack a stack obtained by {@link #getStack()}, possibly on another thread, may be null
+     * @param context the given context
+     * @return the stack if the given context was pushed to it, null if the given context was on top already
+     */
+    public static Stack startIfNotOnTop(Stack stack, CombinedInterceptorAndDecoratorStackMethodHandler context) {
+        if (stack == null || !stack.isOwnedByCurrentThread()) {
+            // e.g. InvocationContext.proceed() called on another thread
+            return startIfNotOnTop(context);
+        }
         if (stack.startIfNotOnTop(context)) {
             return stack;
         }
