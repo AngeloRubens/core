@@ -22,9 +22,9 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.invoke.SwitchPoint;
 import java.lang.ref.WeakReference;
-import java.util.ArrayDeque;
-import java.util.Deque;
+import java.util.Arrays;
 import java.util.EmptyStackException;
+import java.util.NoSuchElementException;
 
 /**
  * A class that holds the interception (and decoration) contexts which are currently in progress.
@@ -81,13 +81,15 @@ public class InterceptionDecorationContext {
 
     public static class Stack {
         private static final int INITIAL_CAPACITY = 4;
-        private final Deque<CombinedInterceptorAndDecoratorStackMethodHandler> elements;
         private final Object[] holder;
+        // elements[0] is the bottom of the stack, elements[size - 1] the top; unused slots are always null
+        private CombinedInterceptorAndDecoratorStackMethodHandler[] elements;
+        private int size;
 
         private Stack(Object[] holder) {
             this.holder = holder;
-            // the stack is usually very shallow, do not allocate the default 16 slots
-            this.elements = new ArrayDeque<CombinedInterceptorAndDecoratorStackMethodHandler>(INITIAL_CAPACITY);
+            // the stack is usually very shallow
+            this.elements = new CombinedInterceptorAndDecoratorStackMethodHandler[INITIAL_CAPACITY];
         }
 
         /**
@@ -99,8 +101,13 @@ public class InterceptionDecorationContext {
          * @return true if the given context was pushed to the top of the stack, false if the given context was on top already
          */
         public boolean startIfNotOnTop(CombinedInterceptorAndDecoratorStackMethodHandler context) {
-            if (elements.isEmpty() || peek() != context) {
-                push(context);
+            int s = size;
+            if (s == 0) {
+                push(context, 0);
+                return true;
+            }
+            if (elements[s - 1] != context) {
+                push(context, s);
                 return true;
             }
             return false;
@@ -110,21 +117,45 @@ public class InterceptionDecorationContext {
             pop();
         }
 
-        private void push(CombinedInterceptorAndDecoratorStackMethodHandler item) {
-            if (elements.isEmpty()) {
+        private void push(CombinedInterceptorAndDecoratorStackMethodHandler item, int s) {
+            if (item == null) {
+                // null elements are not supported (consistent with the previous ArrayDeque based implementation)
+                throw new NullPointerException();
+            }
+            CombinedInterceptorAndDecoratorStackMethodHandler[] es = elements;
+            if (s == es.length) {
+                es = grow();
+            }
+            es[s] = item;
+            size = s + 1;
+            if (s == 0) {
                 // the stack becomes active - reference it strongly so that it cannot be garbage collected
                 holder[ACTIVE] = this;
             }
-            elements.addFirst(item);
+        }
+
+        private CombinedInterceptorAndDecoratorStackMethodHandler[] grow() {
+            CombinedInterceptorAndDecoratorStackMethodHandler[] es = Arrays.copyOf(elements, elements.length << 1);
+            elements = es;
+            return es;
         }
 
         public CombinedInterceptorAndDecoratorStackMethodHandler peek() {
-            return elements.peekFirst();
+            int s = size;
+            return s == 0 ? null : elements[s - 1];
         }
 
         private CombinedInterceptorAndDecoratorStackMethodHandler pop() {
-            CombinedInterceptorAndDecoratorStackMethodHandler top = elements.removeFirst();
-            if (elements.isEmpty()) {
+            int s = size - 1;
+            if (s < 0) {
+                throw new NoSuchElementException();
+            }
+            CombinedInterceptorAndDecoratorStackMethodHandler[] es = elements;
+            CombinedInterceptorAndDecoratorStackMethodHandler top = es[s];
+            // do not retain the handler (and its bean instance) once it is not on the stack anymore
+            es[s] = null;
+            size = s;
+            if (s == 0) {
                 // only weakly referenced from now on, the thread-local does not retain any Weld class
                 holder[ACTIVE] = null;
             }
@@ -132,12 +163,20 @@ public class InterceptionDecorationContext {
         }
 
         public int size() {
-            return elements.size();
+            return size;
         }
 
         @Override
         public String toString() {
-            return "Stack [elements=" + elements + "]";
+            // top of the stack first
+            StringBuilder builder = new StringBuilder("Stack [elements=[");
+            for (int i = size - 1; i >= 0; i--) {
+                builder.append(elements[i]);
+                if (i > 0) {
+                    builder.append(", ");
+                }
+            }
+            return builder.append("]]").toString();
         }
 
     }
@@ -216,7 +255,7 @@ public class InterceptionDecorationContext {
             // there is no interception context on this thread (the caller is not intercepted)
             return null;
         }
-        stack.push(CombinedInterceptorAndDecoratorStackMethodHandler.NULL_INSTANCE);
+        stack.push(CombinedInterceptorAndDecoratorStackMethodHandler.NULL_INSTANCE, stack.size);
         return stack;
     }
 
