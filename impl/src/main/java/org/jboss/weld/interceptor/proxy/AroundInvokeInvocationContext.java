@@ -60,22 +60,30 @@ abstract class AroundInvokeInvocationContext extends AbstractInvocationContext {
     public static AroundInvokeInvocationContext create(Object instance, Method method, Method proceed, Object[] args,
             List<InterceptorMethodInvocation> chain,
             Set<Annotation> interceptorBindings, Stack stack) {
+        return create(instance, method, proceed, MethodInvoker.of(proceed), args, chain, interceptorBindings, stack);
+    }
+
+    static AroundInvokeInvocationContext create(Object instance, Method method, Method proceed, MethodInvoker proceedInvoker,
+            Object[] args, List<InterceptorMethodInvocation> chain, Set<Annotation> interceptorBindings, Stack stack) {
         CombinedInterceptorAndDecoratorStackMethodHandler currentHandler = (stack == null) ? null : stack.peek();
         if (chain.size() == 1) {
-            return new TerminalAroundInvokeInvocationContext(instance, method, proceed, args, null, interceptorBindings,
-                    currentHandler);
+            return new TerminalAroundInvokeInvocationContext(instance, method, proceed, proceedInvoker, args, null,
+                    interceptorBindings, currentHandler);
         } else {
-            return new NonTerminalAroundInvokeInvocationContext(instance, method, proceed, args, interceptorBindings, chain,
-                    currentHandler);
+            return new NonTerminalAroundInvokeInvocationContext(instance, method, proceed, proceedInvoker, args,
+                    interceptorBindings, chain, currentHandler);
         }
     }
 
     final CombinedInterceptorAndDecoratorStackMethodHandler currentHandler;
+    // invokes the proceed method
+    final MethodInvoker proceedInvoker;
 
-    AroundInvokeInvocationContext(Object target, Method method, Method proceed, Object[] parameters,
-            Map<String, Object> contextData,
+    AroundInvokeInvocationContext(Object target, Method method, Method proceed, MethodInvoker proceedInvoker,
+            Object[] parameters, Map<String, Object> contextData,
             Set<Annotation> interceptorBindings, CombinedInterceptorAndDecoratorStackMethodHandler currentHandler) {
         super(target, method, proceed, parameters, contextData, interceptorBindings);
+        this.proceedInvoker = proceedInvoker;
         this.currentHandler = currentHandler;
     }
 
