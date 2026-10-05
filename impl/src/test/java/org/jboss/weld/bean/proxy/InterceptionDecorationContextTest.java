@@ -19,6 +19,7 @@ package org.jboss.weld.bean.proxy;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
@@ -26,11 +27,64 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.EmptyStackException;
 import java.util.NoSuchElementException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 
 import org.jboss.weld.bean.proxy.InterceptionDecorationContext.Stack;
 import org.junit.Test;
 
 public class InterceptionDecorationContextTest {
+
+    @Test
+    public void testCachedStackOnOwnerThread() {
+        Stack stack = InterceptionDecorationContext.getStack();
+        CombinedInterceptorAndDecoratorStackMethodHandler handler = new CombinedInterceptorAndDecoratorStackMethodHandler();
+        assertTrue(stack.isOwnedByCurrentThread());
+        assertSame(stack, InterceptionDecorationContext.startIfNotOnTop(stack, handler));
+        try {
+            assertNull(InterceptionDecorationContext.startIfNotOnTop(stack, handler));
+            assertEquals(1, stack.size());
+        } finally {
+            stack.end();
+        }
+        // A saved invocation context can proceed again after the original invocation has returned.
+        assertSame(stack, InterceptionDecorationContext.startIfNotOnTop(stack, handler));
+        stack.end();
+        assertTrue(InterceptionDecorationContext.empty());
+    }
+
+    @Test
+    public void testCachedStackOnAnotherThread() throws Exception {
+        CombinedInterceptorAndDecoratorStackMethodHandler ownerHandler = new CombinedInterceptorAndDecoratorStackMethodHandler();
+        CombinedInterceptorAndDecoratorStackMethodHandler workerHandler = new CombinedInterceptorAndDecoratorStackMethodHandler();
+        Stack ownerStack = InterceptionDecorationContext.startIfNotOnTop(ownerHandler);
+        FutureTask<Void> task = new FutureTask<>(() -> {
+            assertFalse(ownerStack.isOwnedByCurrentThread());
+            Stack workerStack = InterceptionDecorationContext.startIfNotOnTop(ownerStack, workerHandler);
+            try {
+                assertNotSame(ownerStack, workerStack);
+                assertTrue(workerStack.isOwnedByCurrentThread());
+                assertSame(workerHandler, InterceptionDecorationContext.peek());
+                assertNull(InterceptionDecorationContext.startIfNotOnTop(ownerStack, workerHandler));
+                assertEquals(1, workerStack.size());
+            } finally {
+                workerStack.end();
+            }
+            assertTrue(InterceptionDecorationContext.empty());
+            return null;
+        });
+        Thread worker = new Thread(task, "interception-stack-test");
+        worker.setDaemon(true);
+        try {
+            worker.start();
+            task.get(10, TimeUnit.SECONDS);
+            assertSame(ownerHandler, ownerStack.peek());
+            assertEquals(1, ownerStack.size());
+        } finally {
+            ownerStack.end();
+        }
+        assertTrue(InterceptionDecorationContext.empty());
+    }
 
     @Test
     public void testStackSemantics() {
