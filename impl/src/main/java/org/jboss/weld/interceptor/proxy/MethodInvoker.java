@@ -183,7 +183,8 @@ public final class MethodInvoker {
      */
     public Object invoke(Method method, Object target, Object[] args) throws IllegalAccessException, InvocationTargetException {
         Function<Object, Object> function = noArgumentFunction;
-        if (function != null && permitsCachedAccess(method) && args != null && args.length == 0 && receiverType.isInstance(target)) {
+        if (function != null && permitsCachedAccess(method) && args != null && args.length == 0
+                && receiverType.isInstance(target)) {
             try {
                 return function.apply(target);
             } catch (Throwable e) {
