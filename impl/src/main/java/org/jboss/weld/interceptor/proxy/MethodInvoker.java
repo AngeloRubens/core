@@ -183,7 +183,7 @@ public final class MethodInvoker {
      */
     public Object invoke(Method method, Object target, Object[] args) throws IllegalAccessException, InvocationTargetException {
         Function<Object, Object> function = noArgumentFunction;
-        if (function != null && args != null && args.length == 0 && receiverType.isInstance(target)) {
+        if (function != null && permitsCachedAccess(method) && args != null && args.length == 0 && receiverType.isInstance(target)) {
             try {
                 return function.apply(target);
             } catch (Throwable e) {
@@ -208,7 +208,7 @@ public final class MethodInvoker {
      */
     public Object invoke(Method method, Object target, Object arg) throws IllegalAccessException, InvocationTargetException {
         BiFunction<Object, Object, Object> function = singleArgumentFunction;
-        if (function != null && receiverType.isInstance(target) && accepts(0, arg)) {
+        if (function != null && permitsCachedAccess(method) && receiverType.isInstance(target) && accepts(0, arg)) {
             try {
                 return function.apply(target, arg);
             } catch (Throwable e) {
