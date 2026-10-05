@@ -32,7 +32,8 @@ public class InterceptorMethodHandler implements StackAwareMethodHandler, Serial
     private final transient ConcurrentMap<Method, CachedInterceptionChain> cachedChains;
     /*
      * The chain of the first intercepted method, avoids the map lookup for beans with a single (or a main) intercepted
-     * method. Set at most once; the chain is immutable (final fields only) so it is safely published by the plain write.
+     * method. Racing initializations may select different chains; final fields safely publish either result.
+     * A stale or missing entry only causes a fallback to the concurrent map.
      */
     private transient CachedInterceptionChain firstChain;
 
