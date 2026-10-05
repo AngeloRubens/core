@@ -85,6 +85,7 @@ public final class MethodInvoker {
     }
 
     private final Class<?> receiverType;
+    private final boolean accessChecksSuppressed;
     // the expected classes of the arguments; the wrapper class for a primitive parameter
     private final Class<?>[] argumentTypes;
     private final boolean[] primitive;
@@ -93,7 +94,9 @@ public final class MethodInvoker {
     // (Object, Object)Object, null if the method does not declare exactly one parameter or reflection has to be used
     private final MethodHandle singleArgumentHandle;
 
+    @SuppressWarnings("deprecation")
     private MethodInvoker(Method method) {
+        this.accessChecksSuppressed = method.isAccessible();
         this.receiverType = method.getDeclaringClass();
         Class<?>[] parameterTypes = method.getParameterTypes();
         this.argumentTypes = new Class<?>[parameterTypes.length];
@@ -128,7 +131,7 @@ public final class MethodInvoker {
      */
     public Object invoke(Method method, Object target, Object[] args) throws IllegalAccessException, InvocationTargetException {
         MethodHandle handle = spreadHandle;
-        if (handle != null && receiverType.isInstance(target) && accepts(args)) {
+        if (handle != null && permitsCachedAccess(method) && receiverType.isInstance(target) && accepts(args)) {
             try {
                 return (Object) handle.invokeExact(target, args);
             } catch (Throwable e) {
@@ -145,7 +148,7 @@ public final class MethodInvoker {
      */
     public Object invoke(Method method, Object target, Object arg) throws IllegalAccessException, InvocationTargetException {
         MethodHandle handle = singleArgumentHandle;
-        if (handle != null && receiverType.isInstance(target) && accepts(0, arg)) {
+        if (handle != null && permitsCachedAccess(method) && receiverType.isInstance(target) && accepts(0, arg)) {
             try {
                 return (Object) handle.invokeExact(target, arg);
             } catch (Throwable e) {
@@ -162,7 +165,7 @@ public final class MethodInvoker {
      */
     public Object invoke(Method method, Object target) throws IllegalAccessException, InvocationTargetException {
         MethodHandle handle = spreadHandle;
-        if (handle != null && argumentTypes.length == 0 && receiverType.isInstance(target)) {
+        if (handle != null && permitsCachedAccess(method) && argumentTypes.length == 0 && receiverType.isInstance(target)) {
             try {
                 return (Object) handle.invokeExact(target, NO_ARGUMENTS);
             } catch (Throwable e) {
@@ -170,6 +173,13 @@ public final class MethodInvoker {
             }
         }
         return method.invoke(target);
+    }
+
+    @SuppressWarnings("deprecation")
+    private boolean permitsCachedAccess(Method method) {
+        // Method.equals() ignores the access override. A handle created with suppressed access checks must not
+        // authorize an equal Method without that override, or survive setAccessible(false) on the original Method.
+        return !accessChecksSuppressed || method.isAccessible();
     }
 
     private boolean accepts(Object[] args) {

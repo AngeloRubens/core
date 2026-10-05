@@ -19,6 +19,7 @@ package org.jboss.weld.interceptor.proxy;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
 
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -63,6 +64,14 @@ public class MethodInvokerTest {
 
         private String secret(String value) {
             return "secret " + value;
+        }
+
+        private String restricted(String value) {
+            return value;
+        }
+
+        private String restrictedNoArgs() {
+            return "restricted";
         }
 
         public static String staticMethod(String value) {
@@ -176,6 +185,41 @@ public class MethodInvokerTest {
             return;
         }
         throw new AssertionError("InvocationTargetException expected");
+    }
+
+    @Test
+    public void testCachedHandleDoesNotTransferAccessOverride() throws Exception {
+        Target target = new Target();
+        Method allowed = method("restricted", String.class);
+        allowed.setAccessible(true);
+        MethodInvoker invoker = MethodInvoker.of(allowed);
+        assertEquals("value", invoker.invoke(allowed, target, (Object) "value"));
+
+        Method restricted = method("restricted", String.class);
+        assertSame(invoker, MethodInvoker.of(restricted));
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(restricted, target, (Object) "value"));
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(restricted, target, new Object[] { "value" }));
+
+        allowed.setAccessible(false);
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(allowed, target, (Object) "value"));
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(allowed, target, new Object[] { "value" }));
+        allowed.setAccessible(true);
+        assertEquals("value", invoker.invoke(allowed, target, (Object) "value"));
+    }
+
+    @Test
+    public void testNoArgumentHandleRespectsAccessOverride() throws Exception {
+        Target target = new Target();
+        Method allowed = method("restrictedNoArgs");
+        allowed.setAccessible(true);
+        MethodInvoker invoker = MethodInvoker.of(allowed);
+        assertEquals("restricted", invoker.invoke(allowed, target));
+        Method restricted = method("restrictedNoArgs");
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(restricted, target));
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(restricted, target, new Object[0]));
+        allowed.setAccessible(false);
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(allowed, target));
+        assertThrows(IllegalAccessException.class, () -> invoker.invoke(allowed, target, new Object[0]));
     }
 
     @Test
