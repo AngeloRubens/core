@@ -75,7 +75,6 @@ public class TypeSafeBeanResolver extends AbstractTypeSafeBeanResolver<Bean<?>, 
     public void clear() {
         // Order matters: a thread that reads the new map has to find the resolution cache already cleared.
         super.clear();
-        defaultQualifierResults = new ConcurrentHashMap<>();
     }
 
     @Override
