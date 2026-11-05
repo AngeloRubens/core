@@ -32,9 +32,7 @@ import org.jboss.shrinkwrap.api.BeanArchive;
 import org.jboss.shrinkwrap.api.BeanDiscoveryMode;
 import org.jboss.shrinkwrap.api.ShrinkWrap;
 import org.jboss.weld.test.util.Utils;
-import org.jboss.weld.tests.category.Integration;
 import org.junit.Test;
-import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 
 /**
@@ -42,7 +40,6 @@ import org.junit.runner.RunWith;
  * beans as a lookup with an explicit {@code @Default}, and it must not keep a result from before the container finished
  * booting.
  */
-@Category(Integration.class)
 @RunWith(Arquillian.class)
 public class DefaultQualifierLookupTest {
 
