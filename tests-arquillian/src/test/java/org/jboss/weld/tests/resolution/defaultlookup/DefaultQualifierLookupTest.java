@@ -22,10 +22,10 @@ import static org.junit.Assert.assertTrue;
 
 import jakarta.enterprise.inject.Default;
 import jakarta.enterprise.inject.Instance;
-import jakarta.enterprise.util.AnnotationLiteral;
 import jakarta.enterprise.inject.spi.Bean;
 import jakarta.enterprise.inject.spi.BeanManager;
 import jakarta.enterprise.inject.spi.Extension;
+import jakarta.enterprise.util.AnnotationLiteral;
 import jakarta.inject.Inject;
 
 import org.jboss.arquillian.container.test.api.Deployment;
