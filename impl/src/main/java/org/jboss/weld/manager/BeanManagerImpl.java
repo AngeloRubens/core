@@ -538,6 +538,9 @@ public class BeanManagerImpl implements WeldManager, Serializable {
 
     @Override
     public Set<Bean<?>> getBeans(Type beanType, Annotation... qualifiers) {
+        if (qualifiers.length == 0 && beanType instanceof Class<?>) {
+            return beanResolver.resolveWithDefaultQualifier((Class<?>) beanType);
+        }
         Resolvable resolvable = new ResolvableBuilder(beanType, this).addQualifiers(qualifiers).create();
         return beanResolver.resolve(resolvable, isCacheable(qualifiers));
     }

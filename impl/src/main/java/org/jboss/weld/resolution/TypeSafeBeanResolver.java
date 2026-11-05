@@ -17,6 +17,9 @@
 package org.jboss.weld.resolution;
 
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import jakarta.enterprise.inject.spi.Bean;
 
@@ -29,8 +32,44 @@ import org.jboss.weld.manager.BeanManagerImpl;
  */
 public class TypeSafeBeanResolver extends AbstractTypeSafeBeanResolver<Bean<?>, Set<Bean<?>>> {
 
+    private static final int MAX_DEFAULT_QUALIFIER_ENTRIES = 1024;
+
+    private final BeanManagerImpl manager;
+    // Results of lookups by class with no qualifiers, in front of the resolution cache: the key is the class itself, so a
+    // hit needs neither a ResolvableBuilder nor a Resolvable. Cleared together with the resolution cache.
+    private final ConcurrentMap<Class<?>, Set<Bean<?>>> defaultQualifierResults = new ConcurrentHashMap<>();
+    private final AtomicInteger generation = new AtomicInteger();
+
     public TypeSafeBeanResolver(BeanManagerImpl beanManager, Iterable<Bean<?>> beans) {
         super(beanManager, beans);
+        this.manager = beanManager;
+    }
+
+    /**
+     * Resolves the beans of a class with no qualifiers (that is, with {@code @Default}). Gives the same result as resolving
+     * a {@link Resolvable} built for it.
+     */
+    public Set<Bean<?>> resolveWithDefaultQualifier(Class<?> type) {
+        if (!ResolvableBuilder.isPlainBeanType(type)) {
+            return resolve(new ResolvableBuilder(type, manager).create(), true);
+        }
+        Set<Bean<?>> result = defaultQualifierResults.get(type);
+        if (result == null) {
+            int before = generation.get();
+            result = resolve(new ResolvableBuilder(type, manager).create(), true);
+            // do not keep a result computed while the cache was being cleared
+            if (generation.get() == before && defaultQualifierResults.size() < MAX_DEFAULT_QUALIFIER_ENTRIES) {
+                defaultQualifierResults.putIfAbsent(type, result);
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void clear() {
+        generation.incrementAndGet();
+        super.clear();
+        defaultQualifierResults.clear();
     }
 
     @Override

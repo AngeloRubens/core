@@ -55,6 +55,24 @@ public class ResolvableBuilder {
     private static final Class<?>[] METADATA_TYPES = new Class<?>[] { Interceptor.class, Decorator.class, Bean.class };
     private static final Set<QualifierInstance> ANY_SINGLETON = Collections.singleton(QualifierInstance.ANY);
 
+    /**
+     * Whether a lookup of this class with no qualifiers resolves like any other bean type, that is, is not one of the
+     * facade or metadata types that {@link #create()} treats specially.
+     */
+    static boolean isPlainBeanType(Class<?> type) {
+        for (Class<?> facadeType : FACADE_TYPES) {
+            if (facadeType.equals(type)) {
+                return false;
+            }
+        }
+        for (Class<?> metadataType : METADATA_TYPES) {
+            if (metadataType.equals(type)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     protected Class<?> rawType;
     protected final Set<Type> types;
     protected final Set<QualifierInstance> qualifierInstances;
