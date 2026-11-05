@@ -57,7 +57,8 @@ public class ResolvableBuilder {
 
     /**
      * Whether a lookup of this class with no qualifiers resolves like any other bean type, that is, is not one of the
-     * facade or metadata types that {@link #create()} treats specially.
+     * facade or metadata types that {@link #create()} treats specially. Those are left out of the shortcut in
+     * {@link TypeSafeBeanResolver#resolveWithDefaultQualifier(Class)} to keep it to the plain case.
      */
     static boolean isPlainBeanType(Class<?> type) {
         for (Class<?> facadeType : FACADE_TYPES) {

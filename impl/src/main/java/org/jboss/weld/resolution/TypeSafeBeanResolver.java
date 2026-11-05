@@ -19,7 +19,6 @@ package org.jboss.weld.resolution;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import jakarta.enterprise.inject.spi.Bean;
 
@@ -32,17 +31,15 @@ import org.jboss.weld.manager.BeanManagerImpl;
  */
 public class TypeSafeBeanResolver extends AbstractTypeSafeBeanResolver<Bean<?>, Set<Bean<?>>> {
 
+    // about this many entries at most: concurrent misses may overshoot it slightly
     private static final int MAX_DEFAULT_QUALIFIER_ENTRIES = 1024;
 
-    private final BeanManagerImpl manager;
     // Results of lookups by class with no qualifiers, in front of the resolution cache: the key is the class itself, so a
-    // hit needs neither a ResolvableBuilder nor a Resolvable. Cleared together with the resolution cache.
-    private final ConcurrentMap<Class<?>, Set<Bean<?>>> defaultQualifierResults = new ConcurrentHashMap<>();
-    private final AtomicInteger generation = new AtomicInteger();
+    // hit needs neither a ResolvableBuilder nor a Resolvable. clear() replaces the map rather than emptying it, see below.
+    private volatile ConcurrentMap<Class<?>, Set<Bean<?>>> defaultQualifierResults = new ConcurrentHashMap<>();
 
     public TypeSafeBeanResolver(BeanManagerImpl beanManager, Iterable<Bean<?>> beans) {
         super(beanManager, beans);
-        this.manager = beanManager;
     }
 
     /**
@@ -51,15 +48,16 @@ public class TypeSafeBeanResolver extends AbstractTypeSafeBeanResolver<Bean<?>, 
      */
     public Set<Bean<?>> resolveWithDefaultQualifier(Class<?> type) {
         if (!ResolvableBuilder.isPlainBeanType(type)) {
-            return resolve(new ResolvableBuilder(type, manager).create(), true);
+            return resolve(new ResolvableBuilder(type, getBeanManager()).create(), true);
         }
-        Set<Bean<?>> result = defaultQualifierResults.get(type);
+        // Read the map before resolving. If clear() runs in between, this thread only fills a map that is no longer in use,
+        // so a result computed from the state before the clear can never be seen by a later lookup.
+        ConcurrentMap<Class<?>, Set<Bean<?>>> results = defaultQualifierResults;
+        Set<Bean<?>> result = results.get(type);
         if (result == null) {
-            int before = generation.get();
-            result = resolve(new ResolvableBuilder(type, manager).create(), true);
-            // do not keep a result computed while the cache was being cleared
-            if (generation.get() == before && defaultQualifierResults.size() < MAX_DEFAULT_QUALIFIER_ENTRIES) {
-                defaultQualifierResults.putIfAbsent(type, result);
+            result = resolve(new ResolvableBuilder(type, getBeanManager()).create(), true);
+            if (results.size() < MAX_DEFAULT_QUALIFIER_ENTRIES) {
+                results.putIfAbsent(type, result);
             }
         }
         return result;
@@ -67,9 +65,9 @@ public class TypeSafeBeanResolver extends AbstractTypeSafeBeanResolver<Bean<?>, 
 
     @Override
     public void clear() {
-        generation.incrementAndGet();
+        // Order matters: a thread that reads the new map has to find the resolution cache already cleared.
         super.clear();
-        defaultQualifierResults.clear();
+        defaultQualifierResults = new ConcurrentHashMap<>();
     }
 
     @Override
