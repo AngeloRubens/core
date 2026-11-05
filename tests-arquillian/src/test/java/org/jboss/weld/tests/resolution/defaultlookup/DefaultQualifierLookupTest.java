@@ -22,6 +22,7 @@ import static org.junit.Assert.assertTrue;
 
 import jakarta.enterprise.inject.Default;
 import jakarta.enterprise.inject.Instance;
+import jakarta.enterprise.util.AnnotationLiteral;
 import jakarta.enterprise.inject.spi.Bean;
 import jakarta.enterprise.inject.spi.BeanManager;
 import jakarta.enterprise.inject.spi.Extension;
@@ -53,6 +54,9 @@ public class DefaultQualifierLookupTest {
                 .addAsServiceProvider(Extension.class, LateBeanExtension.class);
     }
 
+    private static class SpecialLiteral extends AnnotationLiteral<Special> implements Special {
+    }
+
     @Inject
     BeanManager manager;
 
@@ -71,6 +75,20 @@ public class DefaultQualifierLookupTest {
     public void facadeAndMetadataTypesAreResolvedAsBefore() {
         assertEquals(manager.getBeans(Instance.class, Default.Literal.INSTANCE), manager.getBeans(Instance.class));
         assertEquals(manager.getBeans(Bean.class, Default.Literal.INSTANCE), manager.getBeans(Bean.class));
+    }
+
+    @Test
+    public void beanWithOnlyACustomQualifierIsNotACandidate() {
+        assertEquals(1, manager.getBeans(Service.class).size());
+        assertEquals(DefaultService.class, manager.getBeans(Service.class).iterator().next().getBeanClass());
+        assertEquals(manager.getBeans(Service.class, Default.Literal.INSTANCE), manager.getBeans(Service.class));
+        assertEquals(1, manager.getBeans(Service.class, new SpecialLiteral()).size());
+    }
+
+    @Test
+    public void primitiveTypeFindsTheBoxedBean() {
+        assertEquals(1, manager.getBeans(int.class).size());
+        assertEquals(manager.getBeans(Integer.class), manager.getBeans(int.class));
     }
 
     @Test

@@ -22,6 +22,8 @@ import java.util.concurrent.ConcurrentMap;
 
 import jakarta.enterprise.inject.spi.Bean;
 
+import org.jboss.weld.config.ConfigurationKey;
+import org.jboss.weld.config.WeldConfiguration;
 import org.jboss.weld.manager.BeanManagerImpl;
 
 /**
@@ -31,15 +33,21 @@ import org.jboss.weld.manager.BeanManagerImpl;
  */
 public class TypeSafeBeanResolver extends AbstractTypeSafeBeanResolver<Bean<?>, Set<Bean<?>>> {
 
-    // about this many entries at most: concurrent misses may overshoot it slightly
-    private static final int MAX_DEFAULT_QUALIFIER_ENTRIES = 1024;
+    private static final long MAX_DEFAULT_QUALIFIER_ENTRIES = 1024;
 
     // Results of lookups by class with no qualifiers, in front of the resolution cache: the key is the class itself, so a
     // hit needs neither a ResolvableBuilder nor a Resolvable. clear() replaces the map rather than emptying it, see below.
     private volatile ConcurrentMap<Class<?>, Set<Bean<?>>> defaultQualifierResults = new ConcurrentHashMap<>();
 
+    // About this many entries at most (concurrent misses may overshoot slightly). Once the map is full it does not evict:
+    // further classes are resolved through the resolution cache until the next clear(). Never more than the size the user
+    // configured for the resolution cache, so that a small or zero org.jboss.weld.resolution.cacheSize is honoured.
+    private final long maxDefaultQualifierEntries;
+
     public TypeSafeBeanResolver(BeanManagerImpl beanManager, Iterable<Bean<?>> beans) {
         super(beanManager, beans);
+        this.maxDefaultQualifierEntries = Math.min(MAX_DEFAULT_QUALIFIER_ENTRIES, beanManager.getServices()
+                .get(WeldConfiguration.class).getLongProperty(ConfigurationKey.RESOLUTION_CACHE_SIZE));
     }
 
     /**
@@ -51,12 +59,12 @@ public class TypeSafeBeanResolver extends AbstractTypeSafeBeanResolver<Bean<?>, 
             return resolve(new ResolvableBuilder(type, getBeanManager()).create(), true);
         }
         // Read the map before resolving. If clear() runs in between, this thread only fills a map that is no longer in use,
-        // so a result computed from the state before the clear can never be seen by a later lookup.
+        // so this map adds no staleness of its own: a lookup after clear() sees what the resolution cache returns, no older.
         ConcurrentMap<Class<?>, Set<Bean<?>>> results = defaultQualifierResults;
         Set<Bean<?>> result = results.get(type);
         if (result == null) {
             result = resolve(new ResolvableBuilder(type, getBeanManager()).create(), true);
-            if (results.size() < MAX_DEFAULT_QUALIFIER_ENTRIES) {
+            if (results.size() < maxDefaultQualifierEntries) {
                 results.putIfAbsent(type, result);
             }
         }
